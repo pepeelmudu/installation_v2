@@ -29,7 +29,6 @@ def test_get_current_state_returns_color_and_glitch():
 
 def test_force_change_picks_different_mood():
     mm = MoodMachine()
-    original = mm.current_mood
     # Force 20 changes — at least one must differ
     seen = set()
     for _ in range(20):
