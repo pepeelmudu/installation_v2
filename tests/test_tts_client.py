@@ -1,5 +1,5 @@
 import asyncio
-import numpy as np
+import struct
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from tts_client import TTSClient, _rms, _is_sentence_end
@@ -9,13 +9,13 @@ def test_rms_silence():
     assert _rms(silence) == 0.0
 
 def test_rms_max_amplitude():
-    samples = np.full(100, 32767, dtype=np.int16)
-    result = _rms(samples.tobytes())
+    samples = struct.pack("<" + "h" * 100, *([32767] * 100))
+    result = _rms(samples)
     assert 0.99 < result <= 1.0
 
 def test_rms_half_amplitude():
-    samples = np.full(100, 16384, dtype=np.int16)
-    result = _rms(samples.tobytes())
+    samples = struct.pack("<" + "h" * 100, *([16384] * 100))
+    result = _rms(samples)
     assert 0.4 < result < 0.6
 
 def test_rms_empty_bytes():
