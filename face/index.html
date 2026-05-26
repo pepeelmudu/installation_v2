@@ -7,7 +7,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
-    #matrix { position: fixed; top: 0; left: 0; z-index: 0; }
+    #matrix     { position: fixed; top: 0; left: 0; z-index: 0; }
     #face-canvas { position: fixed; top: 0; left: 0; z-index: 1; }
     #scanlines {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -31,14 +31,65 @@
       opacity: 0; transition: opacity 0.2s;
       padding: 0 20px;
     }
+
+    /* ── Setup overlay ─────────────────────────────────────── */
+    #setup {
+      position: fixed; inset: 0; z-index: 100;
+      background: #000;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 20px; padding: 40px;
+      font-family: 'Courier New', monospace; color: #eee;
+    }
+    #setup h1 {
+      font-size: 2em; letter-spacing: 6px; color: #00ffff;
+      text-shadow: 0 0 20px #00ffff;
+    }
+    #setup p.sub { color: #555; font-size: 0.8em; letter-spacing: 2px; }
+    .setup-group { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 6px; }
+    .setup-group label { color: #666; font-size: 0.72em; letter-spacing: 1px; }
+    .setup-group select {
+      background: #111; border: 1px solid #333; color: #eee;
+      padding: 10px 12px; border-radius: 4px; font-size: 0.9em;
+      font-family: 'Courier New', monospace; width: 100%;
+    }
+    #start-btn {
+      margin-top: 10px; padding: 12px 40px;
+      background: #00ffff; color: #000;
+      border: none; font-family: 'Courier New', monospace;
+      font-size: 1em; letter-spacing: 3px; cursor: pointer;
+      border-radius: 4px;
+    }
+    #start-btn:hover { background: #00cccc; }
+    #setup-error { color: #ff4444; font-size: 0.8em; min-height: 1.2em; }
   </style>
 </head>
 <body>
+  <!-- Setup overlay (shown first) -->
+  <div id="setup">
+    <h1>ENTITY</h1>
+    <p class="sub">Configuración de audio</p>
+
+    <div class="setup-group">
+      <label>MICRÓFONO</label>
+      <select id="mic-select"><option value="">Cargando...</option></select>
+    </div>
+
+    <div class="setup-group" id="out-group">
+      <label>SALIDA DE AUDIO</label>
+      <select id="out-select"><option value="">Por defecto del sistema</option></select>
+    </div>
+
+    <p id="setup-error"></p>
+    <button id="start-btn">INICIAR</button>
+  </div>
+
+  <!-- Face (hidden until setup complete) -->
   <canvas id="matrix"></canvas>
-  <canvas id="face-canvas"></canvas>
-  <div id="scanlines"></div>
-  <div id="bottom-fade"></div>
-  <div id="subtitle"></div>
+  <canvas id="face-canvas" style="display:none"></canvas>
+  <div id="scanlines" style="display:none"></div>
+  <div id="bottom-fade" style="display:none"></div>
+  <div id="subtitle" style="display:none"></div>
 
   <script type="importmap">
   {
@@ -49,6 +100,130 @@
   }
   </script>
   <script src="matrix.js"></script>
+
+  <script>
+  // ── Setup screen logic ─────────────────────────────────────────
+  const WS_PROTO  = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const WS_BASE   = `${WS_PROTO}//${location.host}`;
+  const CAPTURE_RATE = 16000;  // must match BROWSER_CAPTURE_RATE in config.py
+
+  let micStream = null;
+  let captureCtx = null;
+  let audioWs = null;
+  var isMuted = false;  // var so face.js module can read it as window.isMuted
+
+  async function populateDevices() {
+    // Request mic permission first so labels are populated
+    try {
+      const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tmp.getTracks().forEach(t => t.stop());
+    } catch (_) {}
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const micSel = document.getElementById('mic-select');
+    const outSel = document.getElementById('out-select');
+
+    micSel.innerHTML = '';
+    devices.filter(d => d.kind === 'audioinput').forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Micrófono ${micSel.options.length + 1}`;
+      micSel.appendChild(opt);
+    });
+
+    const supportsOutput = typeof AudioContext.prototype.setSinkId === 'function' ||
+                           typeof HTMLAudioElement.prototype.setSinkId === 'function';
+    if (supportsOutput) {
+      outSel.innerHTML = '<option value="">Por defecto del sistema</option>';
+      devices.filter(d => d.kind === 'audiooutput').forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Salida ${outSel.options.length}`;
+        outSel.appendChild(opt);
+      });
+    } else {
+      document.getElementById('out-group').style.display = 'none';
+    }
+  }
+
+  document.getElementById('start-btn').addEventListener('click', async () => {
+    const errEl = document.getElementById('setup-error');
+    errEl.textContent = '';
+    const micId  = document.getElementById('mic-select').value;
+    const outId  = document.getElementById('out-select').value;
+
+    try {
+      await startAudio(micId, outId);
+      showFace();
+    } catch (e) {
+      errEl.textContent = `Error: ${e.message}`;
+    }
+  });
+
+  async function startAudio(micId, outId) {
+    // ── Capture ──────────────────────────────────────────────
+    captureCtx = new AudioContext({ sampleRate: CAPTURE_RATE });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: micId ? { exact: micId } : undefined, channelCount: 1 },
+    });
+
+    await captureCtx.audioWorklet.addModule('audio-worklet.js');
+    const source    = captureCtx.createMediaStreamSource(micStream);
+    const processor = new AudioWorkletNode(captureCtx, 'mic-processor');
+
+    audioWs = new WebSocket(`${WS_BASE}/audio`);
+    audioWs.binaryType = 'arraybuffer';
+
+    audioWs.addEventListener('open', () => {
+      processor.port.onmessage = (e) => {
+        if (!isMuted && audioWs.readyState === WebSocket.OPEN) {
+          audioWs.send(e.data);
+        }
+      };
+      source.connect(processor);
+    });
+
+    // ── Playback ─────────────────────────────────────────────
+    const playCtx = new AudioContext({ sampleRate: 24000 });
+    if (outId && typeof playCtx.setSinkId === 'function') {
+      await playCtx.setSinkId(outId).catch(() => {});
+    }
+    let scheduledUntil = 0;
+
+    audioWs.addEventListener('message', (e) => {
+      if (!(e.data instanceof ArrayBuffer)) return;
+      const pcm16   = new Int16Array(e.data);
+      const samples = pcm16.length;
+      if (samples === 0) return;
+
+      const buf = playCtx.createBuffer(1, samples, 24000);
+      const ch  = buf.getChannelData(0);
+      for (let i = 0; i < samples; i++) ch[i] = pcm16[i] / 32768;
+
+      const src = playCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(playCtx.destination);
+      const startAt = Math.max(playCtx.currentTime + 0.05, scheduledUntil);
+      src.start(startAt);
+      scheduledUntil = startAt + samples / 24000;
+    });
+
+    audioWs.addEventListener('close', () => {
+      setTimeout(() => startAudio(micId, outId), 2000);
+    });
+  }
+
+  function showFace() {
+    document.getElementById('setup').style.display = 'none';
+    document.getElementById('face-canvas').style.display = '';
+    document.getElementById('scanlines').style.display = '';
+    document.getElementById('bottom-fade').style.display = '';
+    document.getElementById('subtitle').style.display = '';
+  }
+
+  populateDevices();
+  </script>
+
   <script type="module" src="face.js"></script>
 </body>
 </html>
