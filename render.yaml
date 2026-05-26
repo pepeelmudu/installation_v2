@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sculpture-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: SERVER_PORT
+        value: "8000"
+      - key: PROACTIVE_INTERVAL
+        value: "180"
+    healthCheckPath: /health

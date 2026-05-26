@@ -7,3 +7,5 @@ venv/
 # Unused 3D assets
 face/models/*.fbx
 face/models/skull_ok_v1.glb
+
+.superpowers/
