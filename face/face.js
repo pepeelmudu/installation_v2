@@ -227,7 +227,8 @@ import { GlitchEngine } from './glitch.js';
   }
 
   // ── WebSocket ──────────────────────────────────────────────────
-  const WS_URL   = `ws://${location.host}/ws`;
+  const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const WS_URL   = `${WS_PROTO}//${location.host}/ws`;
   const subtitle = document.getElementById('subtitle');
   let ws, subtitleTimer;
 
@@ -240,9 +241,12 @@ import { GlitchEngine } from './glitch.js';
         amplitudeShapes = { jawOpen: Math.min(1.0, msg.value * 1.1) };
       }
 
-      if (msg.type === 'speaking' && !msg.value) {
-        amplitudeShapes = {};
-        targetShapes    = {};
+      if (msg.type === 'speaking') {
+        window.isMuted = msg.value;
+        if (!msg.value) {
+          amplitudeShapes = {};
+          targetShapes    = {};
+        }
       }
 
       if (msg.type === 'viseme') {
