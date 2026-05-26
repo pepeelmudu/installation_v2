@@ -4,6 +4,12 @@ import asyncio
 from fastapi.testclient import TestClient
 from ws_server import app, broadcast, connected_clients
 
+def test_health():
+    client = TestClient(app)
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
 def test_face_static_redirect():
     client = TestClient(app)
     response = client.get("/face/")
