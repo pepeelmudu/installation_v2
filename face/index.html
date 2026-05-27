@@ -220,8 +220,14 @@
     if (outId && typeof playCtx.setSinkId === 'function') {
       await playCtx.setSinkId(outId).catch(() => {});
     }
+    // AnalyserNode: browser reads amplitude from live playback each frame
+    const analyser = playCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.4;
+    analyser.connect(playCtx.destination);
+    window._ttsAnalyser = analyser;  // face.js reads this
+
     let scheduledUntil = 0;
-    let lastSrc = null;
 
     audioWs.addEventListener('message', (e) => {
       if (!(e.data instanceof ArrayBuffer)) return;
@@ -235,17 +241,10 @@
 
       const src = playCtx.createBufferSource();
       src.buffer = buf;
-      src.connect(playCtx.destination);
+      src.connect(analyser);  // through analyser, not direct to destination
       const startAt = Math.max(playCtx.currentTime + 0.05, scheduledUntil);
       src.start(startAt);
       scheduledUntil = startAt + samples / 24000;
-
-      // Track last buffer so we know when playback truly ends
-      if (lastSrc) lastSrc.onended = null;
-      lastSrc = src;
-      src.onended = () => {
-        if (src === lastSrc) window.dispatchEvent(new Event('tts-ended'));
-      };
     });
 
     audioWs.addEventListener('close', () => {

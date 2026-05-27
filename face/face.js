@@ -38,6 +38,8 @@ import { GlitchEngine } from './glitch.js';
   // ── State ──────────────────────────────────────────────────────
   let subtitleColor = new THREE.Color(0x00ffff);
   let targetSubtitleColor = new THREE.Color(0x00ffff);
+  let lastAudioAt = 0;
+  const _analyserBuf = new Float32Array(512);
 
   // Blend shape layers (merged in priority order, higher = wins)
   const BASE_SHAPES   = { browDownLeft: 0.3, browDownRight: 0.3 };
@@ -243,14 +245,8 @@ import { GlitchEngine } from './glitch.js';
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
 
-      if (msg.type === 'amplitude') {
-        amplitudeShapes = { jawOpen: Math.min(1.0, msg.value * 1.1) };
-      }
-
       if (msg.type === 'speaking') {
         window.isMuted = msg.value;
-        // Shape clearing is handled by tts-ended (browser playback end)
-        // so the face stays animated until audio actually finishes
       }
 
       if (msg.type === 'viseme') {
@@ -282,18 +278,29 @@ import { GlitchEngine } from './glitch.js';
 
   connect();
 
-  // Clear face animation when browser audio playback actually ends
-  window.addEventListener('tts-ended', () => {
-    amplitudeShapes = {};
-    targetShapes    = {};
-  });
 
   // ── Render loop ────────────────────────────────────────────────
+  function tickLocalAmplitude() {
+    const analyser = window._ttsAnalyser;
+    if (!analyser) return;
+    analyser.getFloatTimeDomainData(_analyserBuf);
+    let sum = 0;
+    for (let i = 0; i < _analyserBuf.length; i++) sum += _analyserBuf[i] * _analyserBuf[i];
+    const rms = Math.sqrt(sum / _analyserBuf.length);
+    if (rms > 0.008) {
+      amplitudeShapes = { jawOpen: Math.min(1.0, rms * 9) };
+      lastAudioAt = Date.now();
+    } else if (Date.now() - lastAudioAt > 350) {
+      amplitudeShapes = {};
+    }
+  }
+
   function animate() {
     requestAnimationFrame(animate);
 
     if (!modelRoot) { renderer.render(scene, camera); return; }
 
+    tickLocalAmplitude();
     lerpMorphTargets();
     tickBlink();
     tickSaccade();
