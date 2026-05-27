@@ -163,13 +163,19 @@
   async function startAudio(micId, outId) {
     // ── Capture ──────────────────────────────────────────────
     captureCtx = new AudioContext({ sampleRate: CAPTURE_RATE });
+    // iOS Safari: AudioContext starts suspended even inside a user gesture
+    await captureCtx.resume();
+
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { deviceId: micId ? { exact: micId } : undefined, channelCount: 1 },
     });
 
+    const actualRate = captureCtx.sampleRate;
     await captureCtx.audioWorklet.addModule('audio-worklet.js');
     const source    = captureCtx.createMediaStreamSource(micStream);
-    const processor = new AudioWorkletNode(captureCtx, 'mic-processor');
+    const processor = new AudioWorkletNode(captureCtx, 'mic-processor', {
+      processorOptions: { targetRate: CAPTURE_RATE, actualRate },
+    });
 
     audioWs = new WebSocket(`${WS_BASE}/audio`);
     audioWs.binaryType = 'arraybuffer';
