@@ -54,21 +54,23 @@ class STTClient:
                 async with self._dg.listen.asyncwebsocket.v("1").connect(options) as conn:
                     self._connection = conn
                     if first:
+                        print("[STT] Connected to Deepgram OK", flush=True)
                         connected_event.set()
                         first = False
                     else:
-                        print("[STT] Reconnected to Deepgram")
+                        print("[STT] Reconnected to Deepgram", flush=True)
 
                     async def on_message(self_inner, result, **kwargs):
                         try:
                             sentence = result.channel.alternatives[0].transcript
+                            print(f"[STT] result speech_final={result.speech_final} transcript={sentence!r}", flush=True)
                             if result.speech_final and sentence.strip():
                                 await on_transcript_inner(sentence)
-                        except Exception:
-                            pass
+                        except Exception as ex:
+                            print(f"[STT] on_message error: {ex}", flush=True)
 
                     async def on_error(self_inner, error, **kwargs):
-                        print(f"[STT] Deepgram error: {error}")
+                        print(f"[STT] Deepgram error: {error}", flush=True)
 
                     on_transcript_inner = self._on_transcript
                     conn.on("Results", on_message)

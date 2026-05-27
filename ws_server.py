@@ -48,14 +48,20 @@ async def audio_endpoint(websocket: WebSocket) -> None:
     global _audio_client
     await websocket.accept()
     _audio_client = websocket
+    print("[AUDIO] Browser connected", flush=True)
+    chunks = 0
     try:
         while True:
             data = await websocket.receive_bytes()
+            chunks += 1
+            if chunks == 1 or chunks % 200 == 0:
+                print(f"[AUDIO] chunks={chunks} bytes={len(data)}", flush=True)
             if _audio_receive_cb:
                 await _audio_receive_cb(data)
     except (WebSocketDisconnect, Exception):
         pass
     finally:
+        print(f"[AUDIO] Browser disconnected after {chunks} chunks", flush=True)
         if _audio_client is websocket:
             _audio_client = None
 
