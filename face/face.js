@@ -39,6 +39,8 @@ import { GlitchEngine } from './glitch.js';
   let subtitleColor = new THREE.Color(0x00ffff);
   let targetSubtitleColor = new THREE.Color(0x00ffff);
   let currentMood = 'hostile';
+  let lastVisemeAt = 0;           // timestamp of last server viseme received
+  const _freqBuf = new Uint8Array(256); // FFT fallback buffer
 
   // Blend shape layers (merged in priority order, higher = wins)
   const BASE_SHAPES   = { browDownLeft: 0.3, browDownRight: 0.3 };
@@ -286,6 +288,7 @@ import { GlitchEngine } from './glitch.js';
       }
 
       if (msg.type === 'viseme') {
+        lastVisemeAt = Date.now();
         amplitudeShapes = msg.shapes || {};
       }
 
@@ -308,10 +311,53 @@ import { GlitchEngine } from './glitch.js';
 
 
   // ── Render loop ────────────────────────────────────────────────
+  function _band(lo, hi) {
+    const s = Math.max(0, Math.floor(lo / 46.875));
+    const e = Math.min(255, Math.ceil(hi / 46.875));
+    let sum = 0;
+    for (let i = s; i <= e; i++) sum += _freqBuf[i];
+    return sum / ((e - s + 1) * 255);
+  }
+
   function tickLocalVoice() {
-    // Server visemes (ws "viseme" events) drive amplitudeShapes directly.
-    // Only job here: clear shapes when entity stops speaking.
+    // Not speaking → close mouth immediately
     if (!window.isMuted) {
+      amplitudeShapes = {};
+      return;
+    }
+
+    // Server visemes received recently → they already set amplitudeShapes, nothing to do
+    if (Date.now() - lastVisemeAt < 300) return;
+
+    // Fallback: server visemes not arriving — use FFT to keep mouth moving
+    const analyser = window._ttsAnalyser;
+    if (!analyser) return;
+    analyser.getByteFrequencyData(_freqBuf);
+
+    const fund  = _band(80,  300);
+    const f1    = _band(300, 900);
+    const f2    = _band(900, 2500);
+    const fric  = _band(2500, 7000);
+    const total = fund * 0.5 + f1 * 0.8 + f2 * 0.3 + fric * 0.2;
+
+    if (total > 0.04) {
+      const jaw    = Math.min(0.40, (fund * 0.5 + f1 * 1.4) * 0.65);
+      const f2n    = Math.min(1.0, f2 * 2.8) * Math.max(0, 1 - fund);
+      const round  = Math.min(1.0, f1 * 2.5) * Math.max(0, 1 - f2 * 1.5);
+      amplitudeShapes = {
+        jawOpen:             jaw,
+        mouthSmileLeft:      f2n * 0.40,
+        mouthSmileRight:     f2n * 0.40,
+        mouthFunnel:         round * 0.45,
+        mouthPucker:         round * 0.28,
+        mouthStretchLeft:    Math.min(0.25, fric * 3.5),
+        mouthStretchRight:   Math.min(0.25, fric * 3.5),
+        mouthLowerDownLeft:  jaw * 0.40,
+        mouthLowerDownRight: jaw * 0.40,
+        mouthUpperUpLeft:    jaw * 0.20,
+        mouthUpperUpRight:   jaw * 0.20,
+      };
+    } else {
       amplitudeShapes = {};
     }
   }
