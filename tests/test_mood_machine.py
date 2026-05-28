@@ -24,39 +24,39 @@ def test_prompt_contains_base_and_level_fragment():
     assert LEVEL_PROMPTS[0] in prompt
 
 
-def test_insult_escalates_one_level():
+def test_single_insult_instantly_reaches_enraged():
     a = AnnoyanceState()
     delta, reason = classify_user_input("Eres un gilipollas")
-    assert delta == 3
+    assert delta == 10
     assert reason == "insulto a la entidad"
     level_change = a.apply(delta, reason)
-    assert a.level == 1
-    assert level_change == 1
-
-
-def test_three_insults_reach_enraged():
-    a = AnnoyanceState()
-    for _ in range(3):
-        d, r = classify_user_input("Eres una mierda")
-        a.apply(d, r)
     assert a.level == 3
+    assert level_change == 3
     assert a.mood_id == "hostile"
 
 
-def test_apology_calms_down():
+def test_sexual_also_instantly_enraged():
     a = AnnoyanceState()
-    a.apply(*classify_user_input("Eres tonto"))  # +3 → level 1
-    a.apply(*classify_user_input("Eres tonto"))  # +3 → level 2
+    delta, _ = classify_user_input("chuparme la polla")
+    assert delta == 10
+    a.apply(delta, "sexual")
+    assert a.level == 3
+
+
+def test_apology_drops_one_level_from_max():
+    a = AnnoyanceState()
+    a.apply(*classify_user_input("Eres tonto"))        # +10 → level 3 (points=10)
+    assert a.level == 3
+    a.apply(*classify_user_input("Lo siento mucho"))   # -2  → points=8, level 2
     assert a.level == 2
-    a.apply(*classify_user_input("Lo siento mucho"))  # -2 → level 1
-    assert a.level == 1
 
 
-def test_politeness_decrements():
+def test_politeness_decrements_from_max():
     a = AnnoyanceState()
-    a.apply(*classify_user_input("Eres tonto"))   # +3 → 3
-    a.apply(*classify_user_input("Por favor"))    # -1 → 2
-    assert a.points == 2
+    a.apply(*classify_user_input("Eres tonto"))   # +10 → 10
+    a.apply(*classify_user_input("Por favor"))    # -1  → 9 (still level 3)
+    assert a.points == 9
+    assert a.level == 3
 
 
 def test_points_clamped_to_range():

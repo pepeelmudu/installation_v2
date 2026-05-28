@@ -68,12 +68,16 @@ _RE_POLITE = re.compile(
 
 
 def classify_user_input(text: str) -> tuple[int, str]:
-    """Return (point_delta, reason). Rule-based, fast, runs every turn."""
+    """Return (point_delta, reason). Rule-based, fast, runs every turn.
+
+    Offensive content (insults, sexual) shoots straight to maximum so the
+    entity jumps to its most enraged state on the first provocation.
+    """
     low = text.lower()
     if _RE_INSULT_AT_ENTITY.search(low):
-        return (3, "insulto a la entidad")
+        return (10, "insulto a la entidad")     # instant max → level 3
     if _RE_SEXUAL.search(low):
-        return (4, "sexual")
+        return (10, "sexual")                    # instant max → level 3
     if _RE_APOLOGY.search(low):
         return (-2, "disculpa")
     if _RE_POLITE.search(low):
