@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,11 +8,11 @@ from config import (
     ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID,
     GROQ_MODEL, SERVER_PORT, PROACTIVE_INTERVAL,
 )
-from mood_machine import MoodMachine
+from mood_machine import MoodMachine, detect_expression
 from llm_client import LLMClient
 from tts_client import TTSClient
 from stt_client import STTClient
-from ws_server import app, broadcast, set_audio_receive_callback, send_audio_to_browser
+from ws_server import app, broadcast, set_audio_receive_callback, send_audio_to_browser, send_audio_text
 import uvicorn
 
 mood_machine = MoodMachine()
@@ -42,8 +43,9 @@ async def on_amplitude(value: float) -> None:
     await broadcast({"type": "amplitude", "value": round(value, 3)})
 
 
-async def on_viseme(shapes: dict) -> None:
-    await broadcast({"type": "viseme", "shapes": shapes})
+async def on_viseme_schedule(events: list) -> None:
+    """Send viseme schedule via the AUDIO WebSocket so it stays ordered with audio chunks."""
+    await send_audio_text(json.dumps({"type": "viseme_schedule", "events": events}))
 
 
 async def on_speaking(value: bool) -> None:
@@ -80,8 +82,15 @@ async def on_transcript(text: str) -> None:
             for token in llm_client.stream(text, system_prompt):
                 tokens.append(token)
                 tts_client.feed(token)
-            print(f"[LLM] response: {''.join(tokens)!r}")
+            full_response = ''.join(tokens)
+            print(f"[LLM] response: {full_response!r}")
             tts_client.flush()
+            # Pick face expression from response content (does not change mood/color)
+            expression = detect_expression(full_response)
+            asyncio.run_coroutine_threadsafe(
+                broadcast({"type": "expression", "shapes": expression}),
+                loop,
+            )
         except Exception as e:
             print(f"[LLM/TTS ERROR] {e!r}")
             import traceback; traceback.print_exc()
@@ -131,7 +140,7 @@ async def run_pipeline() -> None:
         voice_id=ELEVENLABS_VOICE_ID,
         on_amplitude=on_amplitude,
         on_speaking=on_speaking,
-        on_viseme=on_viseme,
+        on_viseme_schedule=on_viseme_schedule,
         on_audio_chunk=send_audio_to_browser,
         loop=loop,
     )

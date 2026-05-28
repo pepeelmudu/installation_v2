@@ -83,7 +83,7 @@ class TTSClient:
         voice_id: str,
         on_amplitude: Callable[[float], Awaitable[None]],
         on_speaking: Callable[[bool], Awaitable[None]],
-        on_viseme: Callable[[dict], Awaitable[None]],
+        on_viseme_schedule: Callable[[list], Awaitable[None]],
         on_audio_chunk: Callable[[bytes], Awaitable[None]],
         loop: asyncio.AbstractEventLoop,
     ):
@@ -91,7 +91,7 @@ class TTSClient:
         self._voice_id = voice_id
         self._on_amplitude = on_amplitude
         self._on_speaking = on_speaking
-        self._on_viseme = on_viseme
+        self._on_viseme_schedule = on_viseme_schedule
         self._on_audio_chunk = on_audio_chunk
         self._loop = loop
         self._buffer = ""
@@ -229,7 +229,6 @@ class TTSClient:
                     playing = False
                     self._flushed = False
                     asyncio.run_coroutine_threadsafe(self._on_speaking(False), self._loop)
-                    asyncio.run_coroutine_threadsafe(self._on_viseme({}), self._loop)
                 pending_alignment = None
                 continue
 
@@ -239,7 +238,7 @@ class TTSClient:
                 asyncio.run_coroutine_threadsafe(self._on_speaking(True), self._loop)
 
             if pending_alignment:
-                self._schedule_visemes(pending_alignment, time.monotonic())
+                self._send_viseme_schedule(pending_alignment)
                 pending_alignment = None
 
             try:
@@ -251,40 +250,29 @@ class TTSClient:
             except Exception:
                 pass
 
-    def _schedule_visemes(self, alignment: _AlignmentData, t0: float) -> None:
-        now = time.monotonic()
+    def _send_viseme_schedule(self, alignment: _AlignmentData) -> None:
+        """Build viseme schedule for browser-side scheduling anchored to actual playback time."""
         raw = [
-            (t0 + st - now, st, CHAR_VISEMES[c.lower()])
+            (st, CHAR_VISEMES[c.lower()])
             for c, st in zip(alignment.chars, alignment.start_times)
             if c.lower() in CHAR_VISEMES
         ]
         if not raw:
             return
 
-        events: list[tuple[float, dict]] = []
-        for i, (delay, st, shapes) in enumerate(raw):
-            events.append((max(0.0, delay), shapes))
+        events: list[dict] = []
+        for i, (st, shapes) in enumerate(raw):
+            events.append({"at": st, "shapes": shapes})
             if i + 1 < len(raw):
-                gap = raw[i + 1][1] - st
+                gap = raw[i + 1][0] - st
                 if gap > 0.10:  # word gap — close mouth mid-gap
-                    events.append((max(0.0, delay + min(gap * 0.5, 0.08)), {}))
+                    events.append({"at": st + min(gap * 0.5, 0.08), "shapes": {}})
             else:
-                events.append((max(0.0, delay + 0.08), {}))  # close after last viseme
+                events.append({"at": st + 0.10, "shapes": {}})  # close after last viseme
 
-        # Browser buffers audio ~50ms ahead + network latency; offset visemes to match
-        _BROWSER_AUDIO_OFFSET = 0.12
-
-        async def _do_schedule() -> None:
-            loop = asyncio.get_running_loop()
-            for delay, shapes in events:
-                loop.call_later(
-                    delay + _BROWSER_AUDIO_OFFSET,
-                    lambda s=shapes: asyncio.run_coroutine_threadsafe(
-                        self._on_viseme(s), self._loop
-                    ),
-                )
-
-        asyncio.run_coroutine_threadsafe(_do_schedule(), self._loop)
+        asyncio.run_coroutine_threadsafe(
+            self._on_viseme_schedule(events), self._loop
+        )
 
     # ── public API ─────────────────────────────────────────────────
 

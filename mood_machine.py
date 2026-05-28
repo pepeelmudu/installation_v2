@@ -70,6 +70,75 @@ MOODS: dict[str, dict] = {
 }
 
 
+_INSULT_WORDS = (
+    'gilipollas', 'subnormal', 'capullo', 'imbécil', 'imbecil', 'idiota',
+    'estúpido', 'estupido', 'memo', 'inútil', 'inutil', 'paleto',
+    'patético', 'patetico', 'ridículo', 'ridiculo', 'miserable', 'asco',
+    'joder', 'hostia', 'mierda', 'puta', 'puto', 'coño', 'cabrón', 'cabron',
+)
+_PHILOSOPHICAL_WORDS = (
+    'existencia', 'existir', 'conciencia', 'consciencia', 'tiempo', 'realidad',
+    'sentido', 'eterno', 'infinito', 'muerte', 'alma', 'efímero', 'efimero',
+    'universo', 'vacío', 'vacio', 'significa',
+)
+_DISMISSIVE_WORDS = (
+    'da igual', 'me da', 'no me importa', 'qué más da', 'paso',
+)
+
+
+def detect_expression(text: str) -> dict:
+    """Pick a sustained facial expression overlay from response content.
+
+    Returns ARKit blend-shape dict applied during speech (cleared on speaking:false).
+    Does NOT change mood (color/glitch/voice) — only the face morphs.
+    """
+    low = text.lower()
+    stripped = text.strip()
+
+    # Angry: direct insults or aggressive expletives
+    if any(w in low for w in _INSULT_WORDS):
+        return {
+            'browDownLeft':   0.8,
+            'browDownRight':  0.6,
+            'noseSneerLeft':  0.6,
+            'noseSneerRight': 0.3,
+            'eyeSquintLeft':  0.5,
+            'eyeSquintRight': 0.4,
+            'mouthFrownLeft': 0.3,
+        }
+
+    # Philosophical: existential vocabulary in longer responses
+    if len(stripped) > 50 and any(w in low for w in _PHILOSOPHICAL_WORDS):
+        return {
+            'browInnerUp':   0.7,
+            'eyeLookUpLeft': 0.3, 'eyeLookUpRight': 0.3,
+            'mouthFrownLeft': 0.15,
+        }
+
+    # Paranoid: multiple questions back
+    if stripped.count('?') >= 2:
+        return {
+            'eyeWideLeft':  0.6, 'eyeWideRight': 0.6,
+            'browInnerUp':  0.5,
+            'mouthFrownLeft': 0.2,
+        }
+
+    # Dismissive: short response or dismissive phrases
+    if len(stripped) < 35 or any(w in low for w in _DISMISSIVE_WORDS):
+        return {
+            'browDownLeft':   0.6,
+            'eyeSquintLeft':  0.6, 'eyeSquintRight': 0.3,
+            'mouthFrownLeft': 0.3,
+        }
+
+    # Default: baseline angry frown (entity is permanently hostile)
+    return {
+        'browDownLeft':  0.5,
+        'browDownRight': 0.4,
+        'eyeSquintLeft': 0.2,
+    }
+
+
 class MoodMachine:
     def __init__(self):
         self.current_mood: str = "hostile"

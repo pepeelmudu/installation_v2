@@ -228,9 +228,23 @@
     window._ttsAnalyser = analyser;  // face.js reads this
 
     let scheduledUntil = 0;
+    let pendingVisemeSchedule = null;   // events waiting for next audio chunk to anchor
+    window._currentViseme = null;       // last viseme shapes that fired
+    window._lastVisemeAt  = 0;          // wall-clock time of last viseme
 
     audioWs.addEventListener('message', (e) => {
+      // Text frames carry viseme schedules; bytes carry PCM audio
+      if (typeof e.data === 'string') {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'viseme_schedule') {
+            pendingVisemeSchedule = msg.events;
+          }
+        } catch (_) {}
+        return;
+      }
       if (!(e.data instanceof ArrayBuffer)) return;
+
       const pcm16   = new Int16Array(e.data);
       const samples = pcm16.length;
       if (samples === 0) return;
@@ -241,9 +255,24 @@
 
       const src = playCtx.createBufferSource();
       src.buffer = buf;
-      src.connect(analyser);  // through analyser, not direct to destination
+      src.connect(analyser);
       const startAt = Math.max(playCtx.currentTime + 0.05, scheduledUntil);
       src.start(startAt);
+
+      // Anchor pending viseme schedule to this chunk's actual playback time
+      if (pendingVisemeSchedule) {
+        const events = pendingVisemeSchedule;
+        pendingVisemeSchedule = null;
+        const nowCtx = playCtx.currentTime;
+        for (const ev of events) {
+          const delayMs = (startAt + ev.at - nowCtx) * 1000;
+          setTimeout(() => {
+            window._currentViseme = ev.shapes;
+            window._lastVisemeAt  = Date.now();
+          }, Math.max(0, delayMs));
+        }
+      }
+
       scheduledUntil = startAt + samples / 24000;
     });
 

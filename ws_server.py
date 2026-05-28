@@ -27,6 +27,15 @@ async def send_audio_to_browser(data: bytes) -> None:
             pass
 
 
+async def send_audio_text(text: str) -> None:
+    """Send a text/JSON message over the audio WebSocket (same channel as audio chunks)."""
+    if _audio_client:
+        try:
+            await _audio_client.send_text(text)
+        except Exception:
+            pass
+
+
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"ok": True})

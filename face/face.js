@@ -43,12 +43,13 @@ import { GlitchEngine } from './glitch.js';
   const _freqBuf = new Uint8Array(256);
 
   // Blend shape layers (merged in priority order, higher = wins)
-  const BASE_SHAPES   = { browDownLeft: 0.3, browDownRight: 0.3 };
-  let amplitudeShapes = {};
-  let idleShapes      = {};
-  let gazeShapes      = {};
-  let blinkShapes     = {};
-  const currentShapes = {};
+  const BASE_SHAPES    = { browDownLeft: 0.3, browDownRight: 0.3 };
+  let amplitudeShapes  = {};
+  let idleShapes       = {};
+  let expressionShapes = {};   // sustained emotional expression from LLM response
+  let gazeShapes       = {};
+  let blinkShapes      = {};
+  const currentShapes  = {};
 
   // Timers
   let nextBlink   = Date.now() + 2000 + Math.random() * 3000;
@@ -164,7 +165,7 @@ import { GlitchEngine } from './glitch.js';
     if (!headMesh?.morphTargetDictionary) return;
     const dict = headMesh.morphTargetDictionary;
 
-    const merged = { ...BASE_SHAPES, ...idleShapes, ...gazeShapes, ...amplitudeShapes, ...blinkShapes };
+    const merged = { ...BASE_SHAPES, ...idleShapes, ...expressionShapes, ...gazeShapes, ...amplitudeShapes, ...blinkShapes };
 
     for (const key of Object.keys(dict)) {
       const target = isFinite(merged[key]) ? merged[key] : 0;
@@ -285,6 +286,14 @@ import { GlitchEngine } from './glitch.js';
 
       if (msg.type === 'speaking') {
         window.isMuted = msg.value;
+        if (!msg.value) {
+          // Speech ended → clear sustained expression so face returns to baseline
+          expressionShapes = {};
+        }
+      }
+
+      if (msg.type === 'expression') {
+        expressionShapes = msg.shapes || {};
       }
 
       if (msg.type === 'mood_change') {
@@ -325,8 +334,18 @@ import { GlitchEngine } from './glitch.js';
     const fric  = _band(2500, 7000);
     const total = fund * 0.5 + f1 * 0.8 + f2 * 0.3 + fric * 0.2;
 
+    // Prefer server visemes (per-character, accurate). A fresh {} from the
+    // schedule closes mouth between words/sentences; truthy in JS so it wins.
+    const viseme = window._currentViseme;
+    if (viseme !== null && Date.now() - window._lastVisemeAt < 250) {
+      amplitudeShapes = viseme;
+      if (total > 0.04) lastAudioAt = Date.now();
+      return;
+    }
+
     if (total > 0.04) {
       lastAudioAt = Date.now();
+      // FFT fallback (only when server visemes haven't arrived yet)
       const jaw   = Math.min(0.42, (fund * 0.5 + f1 * 1.4) * 0.70);
       const f2n   = Math.min(1.0, f2 * 2.8) * Math.max(0, 1 - fund);
       const round = Math.min(1.0, f1 * 2.5) * Math.max(0, 1 - f2 * 1.5);
@@ -344,7 +363,9 @@ import { GlitchEngine } from './glitch.js';
         mouthUpperUpRight:   jaw  * 0.20,
       };
     } else if (Date.now() - lastAudioAt > 300) {
+      // Real audio silence for 300ms → close mouth and reset viseme state
       amplitudeShapes = {};
+      window._currentViseme = null;
     }
   }
 
