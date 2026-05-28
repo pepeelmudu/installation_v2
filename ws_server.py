@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Callable, Awaitable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -34,11 +34,6 @@ async def send_audio_text(text: str) -> None:
             await _audio_client.send_text(text)
         except Exception:
             pass
-
-
-@app.get("/")
-async def root() -> RedirectResponse:
-    return RedirectResponse(url="/face/")
 
 
 @app.get("/health")
@@ -96,4 +91,6 @@ async def broadcast(event: dict) -> None:
 
 
 _FACE_DIR = os.path.join(os.path.dirname(__file__), "face")
-app.mount("/face", StaticFiles(directory=_FACE_DIR, html=True), name="face")
+# Mount at root so `oracle.luker.one/` serves index.html directly.
+# Defined AFTER all explicit routes (/health, /ws, /audio) so they take precedence.
+app.mount("/", StaticFiles(directory=_FACE_DIR, html=True), name="face")
