@@ -161,8 +161,8 @@ import { GlitchEngine } from './glitch.js';
     for (const key of Object.keys(dict)) {
       const target = isFinite(merged[key]) ? merged[key] : 0;
       const cur    = isFinite(currentShapes[key]) ? currentShapes[key] : 0;
-      // Asymmetric lerp: snap toward target faster when opening, slower when closing
-      const rate = target > cur ? 0.28 : 0.10;
+      // Asymmetric lerp: faster opening, slightly slower closing for natural feel
+      const rate = target > cur ? 0.28 : 0.18;
       currentShapes[key] = cur + (target - cur) * rate;
       const val = currentShapes[key];
       for (const mesh of morphMeshes) {
@@ -313,8 +313,8 @@ import { GlitchEngine } from './glitch.js';
     if (!analyser) return;
     analyser.getByteFrequencyData(_freqBuf);
 
-    // IIR pre-smooth — reduces frame-to-frame FFT jitter
-    const SMOOTH = 0.65;
+    // Light IIR smooth — enough to remove harsh frame spikes without killing syllable variation
+    const SMOOTH = 0.30;
     _sFund = _sFund * SMOOTH + _band(80,   300)  * (1 - SMOOTH);
     _sF1   = _sF1   * SMOOTH + _band(300,  900)  * (1 - SMOOTH);
     _sF2   = _sF2   * SMOOTH + _band(900,  2500) * (1 - SMOOTH);
