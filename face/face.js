@@ -39,19 +39,16 @@ import { GlitchEngine } from './glitch.js';
   let subtitleColor = new THREE.Color(0x00ffff);
   let targetSubtitleColor = new THREE.Color(0x00ffff);
   let lastAudioAt = 0;
-  const _analyserBuf = new Float32Array(512);
+  let currentMood = 'hostile';
+  const _freqBuf = new Uint8Array(256); // FFT frequency bins
 
   // Blend shape layers (merged in priority order, higher = wins)
   const BASE_SHAPES   = { browDownLeft: 0.3, browDownRight: 0.3 };
   let amplitudeShapes = {};
   let idleShapes      = {};
   let gazeShapes      = {};
-  let targetShapes    = {};
   let blinkShapes     = {};
   const currentShapes = {};
-
-  // Viseme watchdog: clear targetShapes if no viseme received for 500ms
-  let lastVisemeAt = 0;
 
   // Timers
   let nextBlink   = Date.now() + 2000 + Math.random() * 3000;
@@ -158,12 +155,7 @@ import { GlitchEngine } from './glitch.js';
     if (!headMesh?.morphTargetDictionary) return;
     const dict = headMesh.morphTargetDictionary;
 
-    // Watchdog: clear stale visemes
-    if (Object.keys(targetShapes).length > 0 && Date.now() - lastVisemeAt > 2000) {
-      targetShapes = {};
-    }
-
-    const merged = { ...BASE_SHAPES, ...amplitudeShapes, ...idleShapes, ...gazeShapes, ...targetShapes, ...blinkShapes };
+    const merged = { ...BASE_SHAPES, ...idleShapes, ...gazeShapes, ...amplitudeShapes, ...blinkShapes };
 
     for (const key of Object.keys(dict)) {
       const target = isFinite(merged[key]) ? merged[key] : 0;
@@ -208,24 +200,60 @@ import { GlitchEngine } from './glitch.js';
     }, 200 + Math.random() * 800);
   }
 
+  // ── Mood expressions ───────────────────────────────────────────
+  const MOOD_EXPRESSIONS = {
+    hostile: [
+      { browDownLeft: 1.0, browDownRight: 1.0, noseSneerLeft: 0.7, eyeSquintLeft: 0.5, eyeSquintRight: 0.5 },
+      { browDownLeft: 0.8, noseSneerLeft: 0.9, mouthFrownLeft: 0.6, mouthFrownRight: 0.3 },
+      { eyeSquintLeft: 0.9, eyeSquintRight: 0.9, browDownLeft: 0.7, browDownRight: 0.6 },
+      { noseSneerLeft: 0.8, noseSneerRight: 0.4, browDownLeft: 0.9, browDownRight: 0.7 },
+      { mouthFrownLeft: 0.7, mouthFrownRight: 0.7, browDownLeft: 0.6, eyeSquintLeft: 0.4 },
+    ],
+    friendly: [
+      { mouthSmileLeft: 0.5, mouthSmileRight: 0.5, cheekSquintLeft: 0.4, cheekSquintRight: 0.4 },
+      { browInnerUp: 0.4, eyeWideLeft: 0.25, eyeWideRight: 0.25, mouthSmileLeft: 0.3, mouthSmileRight: 0.3 },
+      { cheekSquintLeft: 0.5, cheekSquintRight: 0.5, mouthSmileLeft: 0.2, mouthSmileRight: 0.2 },
+      { browOuterUpLeft: 0.5, browOuterUpRight: 0.5, mouthSmileLeft: 0.4, mouthSmileRight: 0.4 },
+    ],
+    surreal: [
+      { browInnerUp: 1.0, eyeWideLeft: 0.8, eyeWideRight: 0.7, mouthFunnel: 0.3 },
+      { eyeLookUpLeft: 0.9, eyeLookUpRight: 0.8, browInnerUp: 0.7 },
+      { mouthFunnel: 0.5, eyeSquintLeft: 0.3, noseSneerLeft: 0.4, browInnerUp: 0.5 },
+      { jawForward: 0.3, browInnerUp: 0.8, eyeWideLeft: 0.6, eyeWideRight: 0.4 },
+      { eyeLookInLeft: 0.6, eyeLookInRight: 0.6, browDownLeft: 0.3, mouthFunnel: 0.2 },
+    ],
+    paranoid: [
+      { eyeWideLeft: 0.9, eyeWideRight: 0.9, browInnerUp: 0.7, mouthFrownLeft: 0.3 },
+      { eyeLookInLeft: 0.8, eyeLookInRight: 0.8, browDownLeft: 0.4, mouthFrownLeft: 0.4 },
+      { eyeLookOutLeft: 0.9, browInnerUp: 0.9, mouthFrownRight: 0.3, eyeWideLeft: 0.5 },
+      { browDownLeft: 0.6, browDownRight: 0.7, eyeSquintLeft: 0.5, eyeSquintRight: 0.4 },
+    ],
+    dismissive: [
+      { browDownLeft: 0.6, browDownRight: 0.2, mouthFrownLeft: 0.5, eyeSquintLeft: 0.6 },
+      { eyeSquintLeft: 0.8, eyeSquintRight: 0.3, noseSneerLeft: 0.5, browDownLeft: 0.5 },
+      { browOuterUpLeft: 0.7, browDownRight: 0.6, mouthFrownRight: 0.4 },
+      { browDownLeft: 0.9, browDownRight: 0.5, mouthFrownLeft: 0.4, eyeSquintLeft: 0.3 },
+    ],
+    philosophical: [
+      { browInnerUp: 0.8, eyeLookUpLeft: 0.5, eyeLookUpRight: 0.5, mouthFrownLeft: 0.2 },
+      { browInnerUp: 1.0, eyeWideLeft: 0.4, eyeWideRight: 0.4, mouthFunnel: 0.2 },
+      { eyeLookDownLeft: 0.5, eyeLookDownRight: 0.5, browInnerUp: 0.6 },
+      { cheekSquintLeft: 0.3, eyeSquintLeft: 0.4, browDownLeft: 0.3, browInnerUp: 0.4 },
+    ],
+  };
+
   // ── Micro-expressions ──────────────────────────────────────────
   function tickMicroExpression() {
     if (microActive || Date.now() < nextMicro) return;
     microActive = true;
-    const exprs = [
-      { browDownLeft: 0.9, browDownRight: 0.9, noseSneerLeft: 0.5 },
-      { eyeSquintLeft: 0.8, eyeSquintRight: 0.8, browDownLeft: 0.6, browDownRight: 0.6 },
-      { browInnerUp: 0.9, eyeWideLeft: 0.5, eyeWideRight: 0.5 },
-      { noseSneerLeft: 0.7, noseSneerRight: 0.4, mouthFrownLeft: 0.5, mouthFrownRight: 0.5 },
-      { browDownLeft: 0.7, browDownRight: 0.7, eyeSquintLeft: 0.4, eyeSquintRight: 0.4 },
-      { cheekSquintLeft: 0.5, cheekSquintRight: 0.5, noseSneerLeft: 0.4, noseSneerRight: 0.4 },
-    ];
+    const exprs = MOOD_EXPRESSIONS[currentMood] || MOOD_EXPRESSIONS.hostile;
     idleShapes = exprs[Math.floor(Math.random() * exprs.length)];
+    const hold = 350 + Math.random() * 1000;
     setTimeout(() => {
       idleShapes  = {};
       microActive = false;
-      nextMicro   = Date.now() + 2000 + Math.random() * 6000;
-    }, 400 + Math.random() * 1400);
+      nextMicro   = Date.now() + 800 + Math.random() * 4000;
+    }, hold);
   }
 
   // ── WebSocket ──────────────────────────────────────────────────
@@ -249,20 +277,8 @@ import { GlitchEngine } from './glitch.js';
         window.isMuted = msg.value;
       }
 
-      if (msg.type === 'viseme') {
-        const raw = msg.shapes || {};
-        if (Object.keys(raw).length === 0) {
-          targetShapes = {};
-        } else {
-          const SCALE = 1.3;
-          targetShapes = Object.fromEntries(
-            Object.entries(raw).map(([k, v]) => [k, Math.min(1.0, v * SCALE)])
-          );
-          lastVisemeAt = Date.now();
-        }
-      }
-
       if (msg.type === 'mood_change') {
+        currentMood = msg.mood || 'hostile';
         targetSubtitleColor.set(msg.color);
         GlitchEngine.setIntensity(msg.glitch);
       }
@@ -280,17 +296,58 @@ import { GlitchEngine } from './glitch.js';
 
 
   // ── Render loop ────────────────────────────────────────────────
-  function tickLocalAmplitude() {
+  // FFT bands at 24000 Hz sample rate, fftSize 512, 256 bins, ~47 Hz/bin
+  function _band(lo, hi) {
+    const s = Math.max(0, Math.floor(lo / 46.875));
+    const e = Math.min(255, Math.ceil(hi / 46.875));
+    let sum = 0;
+    for (let i = s; i <= e; i++) sum += _freqBuf[i];
+    return sum / ((e - s + 1) * 255);
+  }
+
+  function tickLocalVoice() {
     const analyser = window._ttsAnalyser;
     if (!analyser) return;
-    analyser.getFloatTimeDomainData(_analyserBuf);
-    let sum = 0;
-    for (let i = 0; i < _analyserBuf.length; i++) sum += _analyserBuf[i] * _analyserBuf[i];
-    const rms = Math.sqrt(sum / _analyserBuf.length);
-    if (rms > 0.008) {
-      amplitudeShapes = { jawOpen: Math.min(1.0, rms * 9) };
+    analyser.getByteFrequencyData(_freqBuf);
+
+    const fund = _band(80, 300);    // fundamental — jaw drive
+    const f1   = _band(300, 900);   // F1 — vowel openness (a, o, e)
+    const f2   = _band(900, 2500);  // F2 — vowel quality front/back
+    const fric = _band(2500, 7000); // fricatives — s, f, sh
+
+    const total = fund * 0.5 + f1 * 0.8 + f2 * 0.3 + fric * 0.2;
+
+    if (total > 0.06) {
       lastAudioAt = Date.now();
-    } else if (Date.now() - lastAudioAt > 350) {
+
+      const jaw    = Math.min(1.0, (fund * 0.5 + f1 * 1.4) * 2.5);
+      // front vowels (e, i): high F2 → smile
+      const smile  = Math.min(1.0, f2 * 2.8) * Math.max(0, 1 - fund);
+      // back vowels (o, u): high F1, low F2 → funnel/pucker
+      const round  = Math.min(1.0, f1 * 2.5) * Math.max(0, 1 - f2 * 1.5);
+      // fricatives (s, f, v): mouth stretch
+      const stretch = Math.min(1.0, fric * 4.5);
+      // lip compression for bilabials (p, b, m) — low everything
+      const press  = Math.max(0, 0.3 - total * 2);
+
+      amplitudeShapes = {
+        jawOpen:              jaw,
+        mouthSmileLeft:       smile * 0.55,
+        mouthSmileRight:      smile * 0.55,
+        mouthFunnel:          round * 0.55,
+        mouthPucker:          round * 0.35,
+        mouthStretchLeft:     stretch * 0.4,
+        mouthStretchRight:    stretch * 0.4,
+        mouthPressLeft:       press * 0.5,
+        mouthPressRight:      press * 0.5,
+        mouthLowerDownLeft:   jaw * 0.35,
+        mouthLowerDownRight:  jaw * 0.35,
+        mouthUpperUpLeft:     jaw * 0.2,
+        mouthUpperUpRight:    jaw * 0.2,
+        cheekSquintLeft:      smile * 0.3,
+        cheekSquintRight:     smile * 0.3,
+      };
+    } else if (Date.now() - lastAudioAt > 300) {
       amplitudeShapes = {};
     }
   }
@@ -300,7 +357,7 @@ import { GlitchEngine } from './glitch.js';
 
     if (!modelRoot) { renderer.render(scene, camera); return; }
 
-    tickLocalAmplitude();
+    tickLocalVoice();
     lerpMorphTargets();
     tickBlink();
     tickSaccade();
