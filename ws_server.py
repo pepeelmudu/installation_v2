@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Callable, Awaitable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -34,6 +34,11 @@ async def send_audio_text(text: str) -> None:
             await _audio_client.send_text(text)
         except Exception:
             pass
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/face/")
 
 
 @app.get("/health")
