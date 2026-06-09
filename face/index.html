@@ -339,7 +339,17 @@
     dbgCtx = captureCtx.state; dbgUpdate();
 
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: micId ? { exact: micId } : undefined, channelCount: 1 },
+      audio: {
+        deviceId: micId ? { exact: micId } : undefined,
+        channelCount: 1,
+        // Browser AEC cancels the oracle's voice coming back through the speakers
+        // (echo), NS removes the constant noise floor, AGC keeps levels sane. Without
+        // these, the mic fed Deepgram a continuous, clipping stream with no silence
+        // gaps, so it never endpointed → transcripts arrived ~1 min late.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
 
     const actualRate = captureCtx.sampleRate;
@@ -350,13 +360,14 @@
     // Compressor/leveller: boosts quiet speech and limits loud peaks so the level
     // reaching STT stays consistent no matter how loud/soft or near/far you speak.
     const comp = captureCtx.createDynamicsCompressor();
-    comp.threshold.value = -35;
-    comp.knee.value      = 12;
-    comp.ratio.value     = 8;
+    comp.threshold.value = -24;   // gentler: don't pump the noise floor up to a
+    comp.knee.value      = 12;    // constant signal (that killed Deepgram endpointing)
+    comp.ratio.value     = 3;
     comp.attack.value    = 0.003;
     comp.release.value   = 0.25;
     const micGain   = captureCtx.createGain();
-    micGain.gain.value = 3.0;   // makeup gain after compression
+    micGain.gain.value = 1.0;   // browser AGC already levels; no hot makeup gain (was
+                                // 3.0 → clipped to 32767 and saturated the STT stream)
     const processor = new AudioWorkletNode(captureCtx, 'mic-processor', {
       processorOptions: { targetRate: CAPTURE_RATE, actualRate },
     });
