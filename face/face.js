@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { GlitchEngine } from './glitch.js';
 
 (function () {
@@ -75,6 +76,9 @@ import { GlitchEngine } from './glitch.js';
 
   // ── Load model ─────────────────────────────────────────────────
   const loader = new GLTFLoader();
+  // The model is meshopt-compressed (EXT_meshopt_compression): 31 MB → 2.5 MB.
+  // Without this decoder the GLB won't parse. Morph targets are preserved.
+  loader.setMeshoptDecoder(MeshoptDecoder);
 
   const texLoader = new THREE.TextureLoader();
   function loadTex(path, colorSpace = THREE.SRGBColorSpace) {
@@ -148,7 +152,7 @@ import { GlitchEngine } from './glitch.js';
     }
   }
 
-  loader.load('models/52shapes_v1.glb', (gltf) => {
+  loader.load('models/52shapes_v1.meshopt.glb', (gltf) => {
     const albedoTex = loadTex('models/JPG/Albedo_tattoo.jpg');
     const normalTex = loadTex('models/JPG/Normal.jpg', THREE.LinearSRGBColorSpace);
     const cavityTex = loadTex('models/JPG/Cavity.jpg', THREE.LinearSRGBColorSpace);
