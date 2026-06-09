@@ -255,7 +255,10 @@ async def glitch_refill_loop() -> None:
     loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(12)
-        if annoyance.personality_id != "expo":
+        # No browser connected → don't pre-generate phrases. The personality defaults
+        # to "expo" at boot, so without this gate an idle deploy would hit Groq every
+        # 12s topping up a buffer nobody will ever hear. Same audience rule as TTS.
+        if not has_audience() or annoyance.personality_id != "expo":
             continue
         for category in glitch_buffer.low_categories():
             prompt = glitch.GLITCH_PROMPTS[category]
