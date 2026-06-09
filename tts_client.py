@@ -89,6 +89,43 @@ def _is_sentence_end(text: str, min_chars: int) -> bool:
     return len(text) >= min_chars and bool(SENTENCE_END_RE.search(text.rstrip()))
 
 
+def format_tts_error(e: Exception) -> str:
+    """Turn an opaque ElevenLabs ApiError (whose repr is just 'ApiError()') into a
+    readable line by digging out status_code + the body's detail message/code.
+    Falls back to repr() for plain exceptions."""
+    status = getattr(e, "status_code", None)
+    body = getattr(e, "body", None)
+    if status is None and body is None:
+        return repr(e)
+    parts: list[str] = []
+    if status is not None:
+        parts.append(str(status))
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        code = detail.get("code") or detail.get("status")
+        msg = detail.get("message")
+        tag = ": ".join(x for x in (code, msg) if x)
+        if tag:
+            parts.append(tag)
+    elif body:
+        parts.append(str(body))
+    return " ".join(parts) if parts else repr(e)
+
+
+def low_credit_message(remaining: int, limit: int, threshold_frac: float = 0.1) -> str | None:
+    """Warning string when ElevenLabs credits are exhausted or below threshold_frac
+    of the limit; None when healthy or the limit is unknown (can't compute a ratio)."""
+    if limit <= 0:
+        return None
+    if remaining <= 0:
+        return ("ElevenLabs credits EXHAUSTED (0 remaining) — TTS will fail "
+                "until you recharge or the cycle resets")
+    if remaining <= limit * threshold_frac:
+        pct = remaining / limit * 100
+        return f"ElevenLabs credits LOW: {remaining}/{limit} ({pct:.0f}%) remaining"
+    return None
+
+
 class TTSClient:
     def __init__(
         self,
@@ -99,6 +136,7 @@ class TTSClient:
         on_viseme_schedule: Callable[[list], Awaitable[None]],
         on_audio_chunk: Callable[[bytes], Awaitable[None]],
         loop: asyncio.AbstractEventLoop,
+        has_audience: Callable[[], bool] | None = None,
     ):
         self._client = ElevenLabs(api_key=api_key)
         self._voice_id = voice_id
@@ -107,6 +145,10 @@ class TTSClient:
         self._on_viseme_schedule = on_viseme_schedule
         self._on_audio_chunk = on_audio_chunk
         self._loop = loop
+        # Hard credit-burn backstop: when set and it returns False (no browser
+        # connected), the synth worker drops every job WITHOUT calling ElevenLabs.
+        # No audience → no audio destination → not one credit is ever spent.
+        self._has_audience = has_audience
         self._buffer = ""
 
         self._pending = 0
@@ -130,10 +172,17 @@ class TTSClient:
             if job is None:
                 self._audio_queue.put(None)
                 break
+            # Backstop: never hit the ElevenLabs API with no one connected to hear
+            # it. Drop the job, but still emit _SENTENCE_END so turn bookkeeping
+            # (_pending / _flushed) stays balanced.
+            if self._has_audience is not None and not self._has_audience():
+                print("[TTS] no audience connected — skipping synthesis (0 credits spent)", flush=True)
+                self._audio_queue.put(_SENTENCE_END)
+                continue
             try:
                 self._synth_job(job)
             except Exception as e:
-                print(f"[TTS ERROR] {e!r}")
+                print(f"[TTS ERROR] {format_tts_error(e)}")
             finally:
                 self._audio_queue.put(_SENTENCE_END)
 
@@ -162,7 +211,7 @@ class TTSClient:
                     alignment_chars.extend(list(getattr(alignment, 'characters', []) or []))
                     alignment_times.extend(list(getattr(alignment, 'character_start_times_seconds', []) or []))
         except Exception as e:
-            print(f"[TTS] stream_with_timestamps failed ({e!r}), falling back")
+            print(f"[TTS] stream_with_timestamps failed ({format_tts_error(e)}), falling back")
             self._stream_plain(job, settings)
             return
 
@@ -359,6 +408,20 @@ class TTSClient:
 
     def _voice_settings_for(self, mood: str) -> VoiceSettings:
         return self._mood_voice_settings(mood)
+
+    def credit_status(self) -> dict:
+        """Query the ElevenLabs account's character balance. Blocking — call from a
+        thread. Requires an API key with the 'user_read' scope; raises ApiError
+        (401 missing_permissions) otherwise. Returns used/limit/remaining/reset_unix."""
+        sub = self._client.user.subscription.get()
+        used = getattr(sub, "character_count", 0) or 0
+        limit = getattr(sub, "character_limit", 0) or 0
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": max(limit - used, 0),
+            "reset_unix": getattr(sub, "next_character_count_reset_unix", None),
+        }
 
     def close(self) -> None:
         self._synth_queue.put(None)

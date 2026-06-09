@@ -2,8 +2,69 @@ import asyncio
 import struct
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from tts_client import TTSClient, _rms, _is_sentence_end, _SynthJob
+from tts_client import (
+    TTSClient, _rms, _is_sentence_end, _SynthJob,
+    format_tts_error, low_credit_message,
+)
 from config import ELEVENLABS_MODEL, ELEVENLABS_MODEL_V3
+
+
+class _FakeApiError(Exception):
+    """Mimics elevenlabs.core.ApiError: empty repr, info hidden in attrs."""
+    def __init__(self, status_code, body):
+        super().__init__()
+        self.status_code = status_code
+        self.body = body
+
+    def __repr__(self):
+        return "ApiError()"
+
+
+def test_format_tts_error_surfaces_quota_message():
+    e = _FakeApiError(401, {"detail": {
+        "code": "quota_exceeded",
+        "message": "You have 0 credits remaining",
+        "status": "quota_exceeded",
+    }})
+    out = format_tts_error(e)
+    assert "401" in out
+    assert "quota_exceeded" in out
+    assert "0 credits remaining" in out
+    assert out != "ApiError()"
+
+
+def test_format_tts_error_handles_missing_permissions():
+    e = _FakeApiError(401, {"detail": {
+        "status": "missing_permissions",
+        "message": "missing the permission user_read",
+    }})
+    out = format_tts_error(e)
+    assert "missing_permissions" in out
+    assert "user_read" in out
+
+
+def test_format_tts_error_falls_back_to_repr_for_plain_exception():
+    assert format_tts_error(ValueError("boom")) == repr(ValueError("boom"))
+
+
+def test_low_credit_message_none_when_healthy():
+    assert low_credit_message(remaining=90000, limit=100000) is None
+
+
+def test_low_credit_message_warns_below_threshold():
+    msg = low_credit_message(remaining=5000, limit=100000)  # 5% < 10%
+    assert msg is not None
+    assert "LOW" in msg
+
+
+def test_low_credit_message_exhausted_at_zero():
+    msg = low_credit_message(remaining=0, limit=100000)
+    assert msg is not None
+    assert "EXHAUSTED" in msg
+
+
+def test_low_credit_message_none_when_limit_unknown():
+    assert low_credit_message(remaining=0, limit=0) is None
 
 
 def _make_client():
@@ -167,6 +228,49 @@ def test_say_special_shout_is_faster():
         c.say_special("BITCOIN PUMPED", mood="shout")
         job = c._synth_queue.get_nowait()
         assert getattr(job.voice_settings, "speed", 1.0) > 1.0
+    finally:
+        c.close()
+        c._loop.close()
+
+
+import time
+
+
+def _make_client_with_audience(has_audience):
+    loop = asyncio.new_event_loop()
+    return TTSClient(api_key="fake", voice_id="v", on_amplitude=AsyncMock(),
+                     on_speaking=AsyncMock(), on_viseme_schedule=AsyncMock(),
+                     on_audio_chunk=AsyncMock(), loop=loop, has_audience=has_audience)
+
+
+def test_no_audience_means_zero_elevenlabs_calls():
+    # The credit-burn guarantee: with no browser connected, NOTHING reaches the
+    # ElevenLabs API — not one credit can be spent talking to an empty room.
+    c = _make_client_with_audience(lambda: False)
+    try:
+        c._client.text_to_speech.stream = MagicMock(return_value=iter([]))
+        c._client.text_to_speech.stream_with_timestamps = MagicMock(return_value=iter([]))
+        c.feed("This is a full sentence that should never be synthesized.")
+        c.flush()
+        time.sleep(0.3)
+        assert c._client.text_to_speech.stream.called is False
+        assert c._client.text_to_speech.stream_with_timestamps.called is False
+    finally:
+        c.close()
+        c._loop.close()
+
+
+def test_with_audience_synthesis_proceeds():
+    c = _make_client_with_audience(lambda: True)
+    try:
+        c._client.text_to_speech.stream = MagicMock(return_value=iter([]))
+        c._client.text_to_speech.stream_with_timestamps = MagicMock(return_value=iter([]))
+        c.feed("This is a full sentence that should be synthesized now.")
+        c.flush()
+        time.sleep(0.3)
+        # at least one API path was hit (timestamps, with plain as fallback)
+        assert (c._client.text_to_speech.stream_with_timestamps.called
+                or c._client.text_to_speech.stream.called)
     finally:
         c.close()
         c._loop.close()

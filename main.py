@@ -8,14 +8,15 @@ from config import (
     DEEPGRAM_API_KEY, GROQ_API_KEY,
     ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID,
     GROQ_MODEL, GROQ_FALLBACK_MODELS, SERVER_PORT, PROACTIVE_INTERVAL,
+    CREDIT_CHECK_INTERVAL,
 )
 from mood_machine import AnnoyanceState, classify_user_input, detect_expression
 from llm_client import LLMClient
-from tts_client import TTSClient
+from tts_client import TTSClient, format_tts_error, low_credit_message
 from stt_client import STTClient
 from ws_server import (
     app, broadcast, set_audio_receive_callback, set_personality_callback,
-    send_audio_to_browser, send_audio_text,
+    send_audio_to_browser, send_audio_text, has_audience,
 )
 import uvicorn
 import expo_glitch as glitch
@@ -212,6 +213,11 @@ async def proactive_loop() -> None:
         await asyncio.sleep(5)
         if _speaking or tts_client is None:
             continue
+        # No browser on /audio → nobody can hear it. Skip synthesis so an idle
+        # deployment doesn't burn ElevenLabs credits talking to an empty room.
+        if not has_audience():
+            _last_activity = time.monotonic()  # don't fire a backlog when someone arrives
+            continue
         now = time.monotonic()
 
         if annoyance.personality_id == "expo":
@@ -264,6 +270,30 @@ async def glitch_refill_loop() -> None:
                 glitch_buffer.add(category, robotify(line, prob=glitch.ROBOT_PROB))
 
 
+async def credit_watch_loop() -> None:
+    """Poll the ElevenLabs credit balance and warn in the logs before it runs out,
+    so an empty account never silently kills TTS again. Needs an API key with the
+    'user_read' scope; if the key lacks it, logs once and stops (no spam)."""
+    if tts_client is None:
+        return
+    loop = asyncio.get_running_loop()
+    await asyncio.sleep(5)
+    while True:
+        try:
+            status = await loop.run_in_executor(_executor, tts_client.credit_status)
+        except Exception as e:
+            print(f"[CREDITS] cannot read balance ({format_tts_error(e)}); "
+                  f"give the API key the 'user_read' scope to enable this — disabling check",
+                  flush=True)
+            return
+        warning = low_credit_message(status["remaining"], status["limit"])
+        if warning:
+            print(f"[CREDITS] ⚠ {warning}", flush=True)
+        else:
+            print(f"[CREDITS] {status['remaining']}/{status['limit']} remaining", flush=True)
+        await asyncio.sleep(CREDIT_CHECK_INTERVAL)
+
+
 async def silence_reset_loop() -> None:
     """Reset annoyance to 0 after a long silence — assume the previous visitor left."""
     while True:
@@ -289,6 +319,7 @@ async def run_pipeline() -> None:
         on_viseme_schedule=on_viseme_schedule,
         on_audio_chunk=send_audio_to_browser,
         loop=loop,
+        has_audience=has_audience,
     )
     tts_client.set_mood(annoyance.mood_id)
 
@@ -306,6 +337,7 @@ async def run_pipeline() -> None:
         proactive_loop(),
         silence_reset_loop(),
         glitch_refill_loop(),
+        credit_watch_loop(),
     )
 
 

@@ -49,3 +49,6 @@ AUDIO_PLAYBACK_RATE  = 24000
 
 # Seconds of silence before the sculpture speaks proactively.
 PROACTIVE_INTERVAL = int(os.getenv("PROACTIVE_INTERVAL", "180"))
+
+# How often to poll the ElevenLabs credit balance and warn before it runs out.
+CREDIT_CHECK_INTERVAL = int(os.getenv("CREDIT_CHECK_INTERVAL", "600"))

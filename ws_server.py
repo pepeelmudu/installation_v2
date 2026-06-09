@@ -28,6 +28,13 @@ def set_personality_callback(cb: Callable[[str], Awaitable[None]]) -> None:
     _personality_cb = cb
 
 
+def has_audience() -> bool:
+    """True when a browser is connected to /audio (i.e. someone can actually
+    hear the sculpture). The proactive loop gates on this so an idle deployment
+    doesn't keep synthesizing into the void and burning TTS credits."""
+    return _audio_client is not None
+
+
 async def send_audio_to_browser(data: bytes) -> None:
     if _audio_client:
         try:

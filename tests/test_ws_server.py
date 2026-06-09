@@ -2,7 +2,8 @@
 import pytest
 import asyncio
 from fastapi.testclient import TestClient
-from ws_server import app, broadcast, connected_clients
+import ws_server
+from ws_server import app, broadcast, connected_clients, has_audience
 
 def test_health():
     client = TestClient(app)
@@ -34,3 +35,24 @@ async def test_broadcast_removes_disconnected_client():
     connected_clients.add(mock_ws)
     await broadcast({"type": "test"})
     assert mock_ws not in connected_clients
+
+
+def test_has_audience_false_when_no_audio_client():
+    # No browser on /audio → nobody can hear proactive speech, so the proactive
+    # loop must NOT synthesize (otherwise an idle deployment burns TTS credits).
+    saved = ws_server._audio_client
+    try:
+        ws_server._audio_client = None
+        assert has_audience() is False
+    finally:
+        ws_server._audio_client = saved
+
+
+def test_has_audience_true_when_audio_client_connected():
+    from unittest.mock import AsyncMock
+    saved = ws_server._audio_client
+    try:
+        ws_server._audio_client = AsyncMock()
+        assert has_audience() is True
+    finally:
+        ws_server._audio_client = saved
