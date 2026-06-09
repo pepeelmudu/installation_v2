@@ -73,10 +73,12 @@ async def on_speaking(value: bool) -> None:
         if _unmute_task and not _unmute_task.done():
             _unmute_task.cancel()
         stt_client.set_muted(True)
-        # Watchdog: never leave the mic muted longer than this, even if a
-        # speaking=False event is ever missed (would otherwise wedge the mic).
+        # Watchdog: never leave STT muted long, even if a speaking=False is missed
+        # (which used to wedge the mic). Safe to fire mid-speech now: the browser
+        # withholds the mic during real playback, so STT gets no oracle audio to
+        # echo-transcribe regardless of this flag.
         async def _force_unmute():
-            await asyncio.sleep(25)
+            await asyncio.sleep(3)
             stt_client.set_muted(False)
             print("[STT] watchdog force-unmute", flush=True)
         _unmute_task = asyncio.create_task(_force_unmute())

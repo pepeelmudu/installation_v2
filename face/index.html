@@ -369,7 +369,12 @@
     audioWs.addEventListener('open', () => {
       dbgWs = 'open'; dbgUpdate();
       processor.port.onmessage = (e) => {
-        if (!isMuted && audioWs.readyState === WebSocket.OPEN) {
+        // Mute the mic ONLY while TTS audio is actually playing (so the user's mic
+        // doesn't capture the oracle's voice from the speakers). This is driven by
+        // REAL playback (_playbackEndsAt), NOT the flaky 'speaking' event: a missed
+        // speaking=false used to leave the mic muted forever and kill input entirely.
+        const playing = window._playbackEndsAt && Date.now() < window._playbackEndsAt + 200;
+        if (!playing && audioWs.readyState === WebSocket.OPEN) {
           audioWs.send(e.data);
           dbgChunks++; if (dbgChunks % 50 === 0) dbgUpdate();
         }

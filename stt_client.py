@@ -1,5 +1,7 @@
 import asyncio
-from deepgram import DeepgramClient, LiveOptions, LiveTranscriptionEvents
+from deepgram import (
+    DeepgramClient, DeepgramClientOptions, LiveOptions, LiveTranscriptionEvents,
+)
 from typing import Callable, Awaitable
 from config import (
     DEEPGRAM_MODEL, DEEPGRAM_LANGUAGE,
@@ -14,7 +16,12 @@ class STTClient:
         api_key: str,
         on_transcript: Callable[[str], Awaitable[None]],
     ):
-        self._dg = DeepgramClient(api_key=api_key)
+        # keepalive: the SDK sends periodic KeepAlive messages during silence so
+        # Deepgram doesn't close the socket with NET-0001 ("did not receive audio
+        # within the timeout window"). Needed because the browser withholds the mic
+        # while the oracle is speaking — gaps can exceed Deepgram's ~10s timeout.
+        config = DeepgramClientOptions(options={"keepalive": "true"})
+        self._dg = DeepgramClient(api_key=api_key, config=config)
         self._on_transcript = on_transcript
         self._connection = None
         self._muted = False
